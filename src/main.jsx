@@ -29,6 +29,7 @@ function App() {
   const [hook, setHook] = React.useState("");
   const [overlay, setOverlay] = React.useState("");
   const [ranking, setRanking] = React.useState(false);
+  const renderToken = React.useRef(0);
   const [status, setStatus] = React.useState("Upload a video to start.");
   const [busy, setBusy] = React.useState(false);
   const [outputs, setOutputs] = React.useState([]);
@@ -41,6 +42,10 @@ function App() {
   React.useEffect(() => {
     return () => { if (url) URL.revokeObjectURL(url); outputs.forEach(o => URL.revokeObjectURL(o.url)); };
   }, [url]);
+
+  React.useEffect(() => {
+    if (videoRef.current && current) videoRef.current.currentTime = current.start;
+  }, [selected]);
 
   function loadFile(e) {
     const f = e.target.files?.[0];
@@ -57,7 +62,10 @@ function App() {
   function metadata() {
     const d = Number(videoRef.current?.duration || 0);
     setDuration(d);
-    if (d > 0 && clips.length === 0) addClip(0, d);
+    if (d > 0 && clips.length === 0) {
+      const c = { id: uid(), start: 0, end: d, title: "Clip 1", hook: "", overlay: "" };
+      setClips([c]); setSelected(c.id);
+    }
   }
 
   function addClip(start = 0, end = duration) {
@@ -153,7 +161,7 @@ function App() {
     const chunks = [];
     recorder.ondataavailable = e => e.data?.size && chunks.push(e.data);
     const stopped = new Promise(resolve => recorder.onstop = () => resolve(new Blob(chunks, { type: mime })));
-    recorder.start(200);
+    recorder.start(100);
     await video.play();
     await new Promise(resolve => {
       const loop = () => {
@@ -169,7 +177,7 @@ function App() {
   async function renderAll() {
     if (!videoRef.current || !clips.length) return setStatus("Add at least one clip.");
     if (!window.MediaRecorder) return setStatus("Use Chrome or Edge for browser rendering.");
-    setBusy(true); setOutputs([]); setStatus("Rendering clips in the browser...");
+    setBusy(true); renderToken.current += 1; setOutputs([]); setStatus("Rendering clips in the browser...");
     try {
       const result = [];
       for (let i=0;i<clips.length;i++) {
