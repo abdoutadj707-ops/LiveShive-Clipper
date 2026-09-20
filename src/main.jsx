@@ -28,7 +28,15 @@ function App() {
   const [blurBg, setBlurBg] = React.useState(true);
   const [hook, setHook] = React.useState("");
   const [overlay, setOverlay] = React.useState("");
+  const [caption, setCaption] = React.useState("");
   const [ranking, setRanking] = React.useState(false);
+  const [mute, setMute] = React.useState(false);
+  const [volume, setVolume] = React.useState(1);
+  const [speed, setSpeed] = React.useState(1);
+  const [quality, setQuality] = React.useState("high");
+  const audioCtxRef = React.useRef(null);
+  const mediaSourceRef = React.useRef(null);
+  const audioDestRef = React.useRef(null);
   const renderToken = React.useRef(0);
   const [status, setStatus] = React.useState("Upload a video to start.");
   const [busy, setBusy] = React.useState(false);
@@ -56,7 +64,7 @@ function App() {
     setOutputs([]);
     const next = URL.createObjectURL(f);
     setFile(f); setUrl(next); setClips([]); setSelected(null);
-    setHook(""); setOverlay(""); setStatus("Video loaded. Add your first clip.");
+    setHook(""); setOverlay(""); setCaption(""); setMute(false); setVolume(1); setSpeed(1); setStatus("Video loaded. Add your first clip.");
   }
 
   function metadata() {
@@ -66,6 +74,20 @@ function App() {
       const c = { id: uid(), start: 0, end: d, title: "Clip 1", hook: "", overlay: "" };
       setClips([c]); setSelected(c.id);
     }
+  }
+
+  function duplicateClip() {
+    if (!current) return;
+    const c = { ...current, id: uid(), title: (current.title || "Clip") + " copy" };
+    setClips(v => [...v, c]); setSelected(c.id);
+  }
+
+  function autoSplit() {
+    if (!duration) return;
+    const count = Math.min(8, Math.max(2, Math.ceil(duration / 30)));
+    const size = duration / count;
+    const made = Array.from({length: count}, (_, i) => ({ id: uid(), start: i * size, end: Math.min(duration, (i + 1) * size), title: "Clip " + (i + 1), hook: "", overlay: "", caption: "" }));
+    setClips(made); setSelected(made[0].id); setStatus("Created " + made.length + " editable clip segments.");
   }
 
   function addClip(start = 0, end = duration) {
@@ -121,6 +143,7 @@ function App() {
 
     const hookText = c.hook || hook;
     const overlayText = c.overlay || overlay;
+    const captionText = c.caption || caption;
     ctx.textAlign = "center";
     ctx.direction = "ltr";
     if (hookText) {
@@ -130,8 +153,13 @@ function App() {
     }
     if (overlayText) {
       ctx.font = "700 46px Arial"; ctx.lineWidth = 9; ctx.strokeStyle = "#000";
-      ctx.strokeText(overlayText, w/2, h-150, w-100);
-      ctx.fillStyle = "#fff"; ctx.fillText(overlayText, w/2, h-150, w-100);
+      ctx.strokeText(overlayText, w/2, h-210, w-100);
+      ctx.fillStyle = "#fff"; ctx.fillText(overlayText, w/2, h-210, w-100);
+    }
+    if (captionText) {
+      ctx.font = "700 40px Arial"; ctx.lineWidth = 8; ctx.strokeStyle = "#000";
+      ctx.strokeText(captionText, w/2, h-100, w-100);
+      ctx.fillStyle = "#ffe66d"; ctx.fillText(captionText, w/2, h-100, w-100);
     }
     if (ranking) {
       ctx.textAlign = "left"; ctx.font = "900 86px Arial";
@@ -152,16 +180,44 @@ function App() {
       video.addEventListener("seeked", done);
     });
     const stream = canvas.captureStream(30);
-    if (video.captureStream) {
-      video.captureStream().getAudioTracks().forEach(t => stream.addTrack(t));
+
+    // Route the video's audio through Web Audio so the exported file contains
+    // a real audio track. Directly adding video.captureStream() tracks is
+    // unreliable in several Chromium builds.
+    try {
+      if (!audioCtxRef.current) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) audioCtxRef.current = new AudioCtx();
+      }
+      if (audioCtxRef.current) {
+        if (!mediaSourceRef.current) {
+          mediaSourceRef.current = audioCtxRef.current.createMediaElementSource(video);
+          audioDestRef.current = audioCtxRef.current.createMediaStreamDestination();
+          mediaSourceRef.current.connect(audioDestRef.current);
+          mediaSourceRef.current.connect(audioCtxRef.current.destination);
+        }
+        await audioCtxRef.current.resume();
+        video.muted = mute;
+        video.volume = volume;
+        audioDestRef.current.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+      } else if (video.captureStream) {
+        video.captureStream().getAudioTracks().forEach(t => stream.addTrack(t));
+      }
+    } catch (audioError) {
+      console.warn("Audio routing fallback:", audioError);
+      if (video.captureStream) video.captureStream().getAudioTracks().forEach(t => stream.addTrack(t));
     }
+
     let mime = "video/webm;codecs=vp9,opus";
     if (!MediaRecorder.isTypeSupported(mime)) mime = "video/webm";
-    const recorder = new MediaRecorder(stream, { mimeType: mime });
+
+    const bitrate = quality === "high" ? 8000000 : quality === "medium" ? 5000000 : 2500000;
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: bitrate, audioBitsPerSecond: 128000 });
     const chunks = [];
     recorder.ondataavailable = e => e.data?.size && chunks.push(e.data);
     const stopped = new Promise(resolve => recorder.onstop = () => resolve(new Blob(chunks, { type: mime })));
     recorder.start(100);
+    video.playbackRate = speed;
     await video.play();
     await new Promise(resolve => {
       const loop = () => {
@@ -203,7 +259,7 @@ function App() {
         <button className="upload-card" onClick={()=>inputRef.current?.click()}><strong>{file?.name || "Drop or upload video"}</strong><span>MP4 / WebM • local processing</span></button>
         <div className="section-title">CLIPS <em>{clips.length}</em></div>
         <div className="clip-list">{clips.map((c,i)=><button key={c.id} className={"clip-item "+(selected===c.id?"active":"")} onClick={()=>setSelected(c.id)}><span className="clip-num">{i+1}</span><span><b>{c.title}</b><small>{fmt(c.start)} — {fmt(c.end)}</small></span></button>)}</div>
-        <button className="add-clip" disabled={!duration} onClick={()=>addClip(0,duration)}>＋ Add clip</button>
+        <div className="clip-tools"><button className="add-clip" disabled={!duration} onClick={()=>addClip(0,duration)}>＋ Add clip</button><button className="add-clip" disabled={!duration} onClick={autoSplit}>Auto split</button></div>
         <div className="sidebar-bottom"><span>LOCAL MODE</span><small>No upload required</small></div>
       </aside>
 
@@ -238,8 +294,12 @@ function App() {
         <div className="section-title">TEXT OVERLAY</div>
         <input className="text-input" placeholder="Hook — e.g. You won't believe this..." value={current?.hook ?? hook} onChange={e=>current?updateClip(current.id,{hook:e.target.value}):setHook(e.target.value)}/>
         <input className="text-input" placeholder="Bottom text / caption" value={current?.overlay ?? overlay} onChange={e=>current?updateClip(current.id,{overlay:e.target.value}):setOverlay(e.target.value)}/>
+        <input className="text-input" placeholder="Highlighted subtitle line" value={current?.caption ?? caption} onChange={e=>current?updateClip(current.id,{caption:e.target.value}):setCaption(e.target.value)}/>
+        <div className="two-controls"><label className="control">Speed<select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label><label className="control">Quality<select value={quality} onChange={e=>setQuality(e.target.value)}><option value="high">High</option><option value="medium">Medium</option><option value="low">Fast</option></select></label></div>
+        <label className="toggle"><span>Mute exported audio</span><input type="checkbox" checked={mute} onChange={e=>setMute(e.target.checked)}/></label>
+        <label className="control">Volume <strong>{Math.round(volume*100)}%</strong><input type="range" min="0" max="1" step=".05" value={volume} onChange={e=>setVolume(Number(e.target.value))}/></label>
         <label className="toggle"><span>Ranking mode 5 → 1</span><input type="checkbox" checked={ranking} onChange={e=>setRanking(e.target.checked)}/></label>
-        {current && <div className="selected-actions"><input className="text-input" value={current.title} onChange={e=>updateClip(current.id,{title:e.target.value})}/><button className="danger" onClick={()=>removeClip(current.id)}>Delete clip</button></div>}
+        {current && <div className="selected-actions"><input className="text-input" value={current.title} onChange={e=>updateClip(current.id,{title:e.target.value})}/><button className="duplicate" onClick={duplicateClip}>Duplicate clip</button><button className="danger" onClick={()=>removeClip(current.id)}>Delete clip</button></div>}
         <button className="render" disabled={busy || !clips.length} onClick={renderAll}>{busy?"Rendering...":"Render all clips"} <span>→</span></button>
         {outputs.length>0 && <div className="outputs"><div className="section-title">EXPORTS</div>{outputs.map((o,i)=><a key={o.id} href={o.url} download={o.name}>↓ {i+1}. {o.name}</a>)}</div>}
         <p className="status">{status}</p>
