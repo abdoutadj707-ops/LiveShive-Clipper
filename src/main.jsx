@@ -247,66 +247,139 @@ function App() {
     } finally { setBusy(false); }
   }
 
-  return <div className="app">
-    <header className="topbar">
-      <div className="brand"><div className="brand-mark">LS</div><div><span>LIVE VIDEO WORKSPACE</span><h1>LiveShive <b>Clipper</b></h1></div></div>
-      <div className="top-actions"><button onClick={()=>inputRef.current?.click()}>＋ New video</button><input ref={inputRef} hidden type="file" accept="video/*" onChange={loadFile}/></div>
+  const [panel, setPanel] = React.useState("edit");
+  const [showGrid, setShowGrid] = React.useState(false);
+  const [playing, setPlaying] = React.useState(false);
+
+  React.useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    const onPlay = () => setPlaying(true), onPause = () => setPlaying(false);
+    v.addEventListener("play", onPlay); v.addEventListener("pause", onPause);
+    return () => { v.removeEventListener("play", onPlay); v.removeEventListener("pause", onPause); };
+  }, [url]);
+
+  function togglePlay() {
+    const v = videoRef.current;
+    if (!v) return;
+    if (v.paused) v.play(); else v.pause();
+  }
+
+  return <div className="studio">
+    <header className="studio-topbar">
+      <div className="studio-brand">
+        <div className="brand-mark">LS</div>
+        <div><div className="eyebrow">SHORT-FORM VIDEO STUDIO</div><h1>LiveShive <b>Clipper</b></h1></div>
+      </div>
+      <div className="project-name">{file?.name || "Untitled project"} <span>• Local</span></div>
+      <div className="top-actions">
+        <button className="ghost-btn" onClick={()=>inputRef.current?.click()}>＋ Import</button>
+        <input ref={inputRef} hidden type="file" accept="video/*" onChange={loadFile}/>
+        <button className="primary-btn" disabled={busy || !clips.length} onClick={renderAll}>Export <span>⌘↵</span></button>
+      </div>
     </header>
 
-    <main className="workspace">
-      <aside className="sidebar">
-        <div className="section-title">PROJECT</div>
-        <button className="upload-card" onClick={()=>inputRef.current?.click()}><strong>{file?.name || "Drop or upload video"}</strong><span>MP4 / WebM • local processing</span></button>
-        <div className="section-title">CLIPS <em>{clips.length}</em></div>
-        <div className="clip-list">{clips.map((c,i)=><button key={c.id} className={"clip-item "+(selected===c.id?"active":"")} onClick={()=>setSelected(c.id)}><span className="clip-num">{i+1}</span><span><b>{c.title}</b><small>{fmt(c.start)} — {fmt(c.end)}</small></span></button>)}</div>
-        <div className="clip-tools"><button className="add-clip" disabled={!duration} onClick={()=>addClip(0,duration)}>＋ Add clip</button><button className="add-clip" disabled={!duration} onClick={autoSplit}>Auto split</button></div>
-        <div className="sidebar-bottom"><span>LOCAL MODE</span><small>No upload required</small></div>
+    <main className="studio-grid">
+      <aside className="media-panel">
+        <div className="panel-head"><span>MEDIA</span><button onClick={()=>inputRef.current?.click()}>＋</button></div>
+        <button className="dropzone" onClick={()=>inputRef.current?.click()}>
+          <div className="drop-icon">↥</div><b>{file ? "Replace source video" : "Import video"}</b><small>MP4, WebM • processed in browser</small>
+        </button>
+        {file && <div className="media-card"><div className="media-thumb">▶</div><div><b>{file.name}</b><small>{fmt(duration)} • source</small></div></div>}
+        <div className="panel-head clips-head"><span>CLIPS <i>{clips.length}</i></span><button disabled={!duration} onClick={autoSplit}>AUTO</button></div>
+        <div className="media-clips">
+          {clips.map((c,i)=><button key={c.id} onClick={()=>setSelected(c.id)} className={"media-clip "+(selected===c.id?"active":"")}>
+            <strong>{String(i+1).padStart(2,"0")}</strong><span><b>{c.title}</b><small>{fmt(c.end-c.start)}</small></span>
+          </button>)}
+        </div>
+        <button className="outline-btn" disabled={!duration} onClick={()=>addClip(0,duration)}>＋ New clip</button>
+        <div className="local-note"><span>●</span> Files never leave your browser</div>
       </aside>
 
-      <section className="editor">
-        <div className="preview-wrap">
-          <div className="preview-toolbar"><span>PREVIEW</span><span className="pill">{format}</span></div>
-          <div className={"preview "+(format==="9:16"?"vertical":"")} >
-            {url ? <video ref={videoRef} src={url} controls onLoadedMetadata={metadata}/> : <div className="empty"><div>▶</div><p>Upload a video to begin</p></div>}
+      <section className="main-stage">
+        <div className="stage-toolbar">
+          <div className="toolbar-group"><button className={showGrid?"tool active":"tool"} onClick={()=>setShowGrid(!showGrid)}>⊞</button><button className="tool" onClick={()=>setFormat(format==="9:16"?"1:1":format==="1:1"?"16:9":"9:16")}>Frame</button></div>
+          <div className="stage-mode"><button className={format==="9:16"?"active":""} onClick={()=>setFormat("9:16")}>9:16</button><button className={format==="1:1"?"active":""} onClick={()=>setFormat("1:1")}>1:1</button><button className={format==="16:9"?"active":""} onClick={()=>setFormat("16:9")}>16:9</button></div>
+          <div className="toolbar-group"><span className="zoom">100%</span><button className="tool">⋯</button></div>
+        </div>
+
+        <div className={"stage-canvas "+(showGrid?"grid-on":"")}>
+          <div className={"video-frame "+(format==="9:16"?"portrait":"")}>
+            {url ? <video ref={videoRef} src={url} controls={false} onLoadedMetadata={metadata} onClick={togglePlay}/> : <div className="empty-stage"><div>＋</div><b>Import a video to start</b><span>Build clips, hooks and vertical videos locally.</span></div>}
+            {current?.hook && <div className="preview-hook">{current.hook}</div>}
+            {current?.overlay && <div className="preview-overlay">{current.overlay}</div>}
+            {current?.caption && <div className="preview-caption">{current.caption}</div>}
+            {ranking && current && <div className="rank-badge">{clips.length - clips.indexOf(current)}</div>}
+            {!playing && url && <button className="center-play" onClick={togglePlay}>▶</button>}
           </div>
         </div>
 
-        <div className="timeline-card">
-          <div className="timeline-head"><div><b>Timeline</b><span>{fmt(duration)}</span></div><button onClick={()=>current && seek(current.start)}>Jump to clip</button></div>
-          <div className="timeline">
-            <div className="track"></div>
-            {clips.map((c,i)=><button key={c.id} className={"segment "+(selected===c.id?"selected":"")} style={{left:(c.start/Math.max(duration,1))*100+"%",width:((c.end-c.start)/Math.max(duration,1))*100+"%"}} onClick={()=>setSelected(c.id)}>{i+1}</button>)}
+        <div className="player-bar">
+          <button onClick={()=>seek(current?.start || 0)}>↤</button><button className="play-main" onClick={togglePlay}>{playing?"Ⅱ":"▶"}</button><button onClick={()=>seek(Math.min(duration,current?.end || duration))}>↦</button>
+          <span className="timecode">{fmt(videoRef.current?.currentTime || current?.start || 0)} / {fmt(duration)}</span>
+          <div className="player-spacer"/>
+          <span className="speed-label">{speed}×</span>
+          <button onClick={()=>setMute(!mute)}>{mute?"🔇":"🔊"}</button>
+        </div>
+
+        <div className="timeline-panel">
+          <div className="timeline-top">
+            <div><b>Timeline</b><span>{clips.length} clips • {fmt(duration)}</span></div>
+            <div className="timeline-actions"><button onClick={autoSplit} disabled={!duration}>Auto split</button><button onClick={()=>current&&duplicateClip()}>Duplicate</button><button onClick={()=>current&&removeClip(current.id)}>Delete</button></div>
           </div>
-          {current && <div className="range-edit">
-            <label>START <strong>{fmt(current.start)}</strong><input type="range" min="0" max={duration} step=".1" value={current.start} onChange={e=>changeRange("start",e.target.value)}/></label>
-            <label>END <strong>{fmt(current.end)}</strong><input type="range" min="0" max={duration} step=".1" value={current.end} onChange={e=>changeRange("end",e.target.value)}/></label>
-          </div>}
+          <div className="ruler"><span>00:00</span><span>{fmt(duration*.25)}</span><span>{fmt(duration*.5)}</span><span>{fmt(duration*.75)}</span><span>{fmt(duration)}</span></div>
+          <div className="tracks">
+            <div className="track-label">VIDEO</div>
+            <div className="track-lane">{clips.map((c,i)=><button key={c.id} onClick={()=>setSelected(c.id)} className={"timeline-clip "+(selected===c.id?"selected":"")} style={{left:(c.start/Math.max(duration,1))*100+"%",width:Math.max(2,((c.end-c.start)/Math.max(duration,1))*100)+"%"}}><b>{i+1}</b> {c.title}</button>)}</div>
+            <div className="track-label">TEXT</div><div className="text-lane"><div className="text-track">HOOK / CAPTIONS</div></div>
+          </div>
+          {current && <div className="range-row"><label>IN <b>{fmt(current.start)}</b><input type="range" min="0" max={duration} step=".1" value={current.start} onChange={e=>changeRange("start",e.target.value)}/></label><label>OUT <b>{fmt(current.end)}</b><input type="range" min="0" max={duration} step=".1" value={current.end} onChange={e=>changeRange("end",e.target.value)}/></label></div>}
         </div>
       </section>
 
-      <aside className="inspector">
-        <div className="section-title">FORMAT</div>
-        <div className="format-grid">{Object.entries(FORMATS).map(([k,v])=><button className={format===k?"active":""} key={k} onClick={()=>setFormat(k)}>{k}<small>{v.label}</small></button>)}</div>
-        <div className="section-title">FRAMING</div>
-        <label className="toggle"><span>Blurred background</span><input type="checkbox" checked={blurBg} onChange={e=>setBlurBg(e.target.checked)}/></label>
-        <label className="control">Horizontal crop<input type="range" value={cropX} onChange={e=>setCropX(Number(e.target.value))}/></label>
-        <label className="control">Vertical crop<input type="range" value={cropY} onChange={e=>setCropY(Number(e.target.value))}/></label>
-        <div className="section-title">TEXT OVERLAY</div>
-        <input className="text-input" placeholder="Hook — e.g. You won't believe this..." value={current?.hook ?? hook} onChange={e=>current?updateClip(current.id,{hook:e.target.value}):setHook(e.target.value)}/>
-        <input className="text-input" placeholder="Bottom text / caption" value={current?.overlay ?? overlay} onChange={e=>current?updateClip(current.id,{overlay:e.target.value}):setOverlay(e.target.value)}/>
-        <input className="text-input" placeholder="Highlighted subtitle line" value={current?.caption ?? caption} onChange={e=>current?updateClip(current.id,{caption:e.target.value}):setCaption(e.target.value)}/>
-        <div className="two-controls"><label className="control">Speed<select value={speed} onChange={e=>setSpeed(Number(e.target.value))}><option value="0.75">0.75×</option><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label><label className="control">Quality<select value={quality} onChange={e=>setQuality(e.target.value)}><option value="high">High</option><option value="medium">Medium</option><option value="low">Fast</option></select></label></div>
-        <label className="toggle"><span>Mute exported audio</span><input type="checkbox" checked={mute} onChange={e=>setMute(e.target.checked)}/></label>
-        <label className="control">Volume <strong>{Math.round(volume*100)}%</strong><input type="range" min="0" max="1" step=".05" value={volume} onChange={e=>setVolume(Number(e.target.value))}/></label>
-        <label className="toggle"><span>Ranking mode 5 → 1</span><input type="checkbox" checked={ranking} onChange={e=>setRanking(e.target.checked)}/></label>
-        {current && <div className="selected-actions"><input className="text-input" value={current.title} onChange={e=>updateClip(current.id,{title:e.target.value})}/><button className="duplicate" onClick={duplicateClip}>Duplicate clip</button><button className="danger" onClick={()=>removeClip(current.id)}>Delete clip</button></div>}
-        <button className="render" disabled={busy || !clips.length} onClick={renderAll}>{busy?"Rendering...":"Render all clips"} <span>→</span></button>
-        {outputs.length>0 && <div className="outputs"><div className="section-title">EXPORTS</div>{outputs.map((o,i)=><a key={o.id} href={o.url} download={o.name}>↓ {i+1}. {o.name}</a>)}</div>}
-        <p className="status">{status}</p>
+      <aside className="inspector-panel">
+        <div className="inspector-tabs"><button className={panel==="edit"?"active":""} onClick={()=>setPanel("edit")}>EDIT</button><button className={panel==="text"?"active":""} onClick={()=>setPanel("text")}>TEXT</button><button className={panel==="audio"?"active":""} onClick={()=>setPanel("audio")}>AUDIO</button><button className={panel==="export"?"active":""} onClick={()=>setPanel("export")}>EXPORT</button></div>
+
+        {panel==="edit" && <div className="inspector-body">
+          <div className="inspector-title">Clip settings <span>{current ? current.title : "No clip selected"}</span></div>
+          <div className="field-label">FORMAT</div>
+          <div className="format-buttons">{["9:16","1:1","16:9"].map(k=><button key={k} className={format===k?"active":""} onClick={()=>setFormat(k)}>{k}</button>)}</div>
+          <div className="field-label">FRAMING</div>
+          <label className="switch-row"><span>Blurred background</span><input type="checkbox" checked={blurBg} onChange={e=>setBlurBg(e.target.checked)}/></label>
+          <label className="range-control">Horizontal <b>{cropX}%</b><input type="range" value={cropX} onChange={e=>setCropX(Number(e.target.value))}/></label>
+          <label className="range-control">Vertical <b>{cropY}%</b><input type="range" value={cropY} onChange={e=>setCropY(Number(e.target.value))}/></label>
+          <div className="field-label">RANKING</div>
+          <label className="switch-row"><span>Ranking 5 → 1</span><input type="checkbox" checked={ranking} onChange={e=>setRanking(e.target.checked)}/></label>
+          {current && <><div className="field-label">CLIP NAME</div><input className="studio-input" value={current.title} onChange={e=>updateClip(current.id,{title:e.target.value})}/></>}
+        </div>}
+
+        {panel==="text" && <div className="inspector-body">
+          <div className="inspector-title">Text & hooks</div>
+          <div className="field-label">HOOK</div><textarea className="studio-textarea" placeholder="This changes everything..." value={current?.hook ?? hook} onChange={e=>current?updateClip(current.id,{hook:e.target.value}):setHook(e.target.value)}/>
+          <div className="field-label">BOTTOM OVERLAY</div><textarea className="studio-textarea" placeholder="Short supporting text" value={current?.overlay ?? overlay} onChange={e=>current?updateClip(current.id,{overlay:e.target.value}):setOverlay(e.target.value)}/>
+          <div className="field-label">HIGHLIGHTED CAPTION</div><textarea className="studio-textarea" placeholder="Key sentence / subtitle" value={current?.caption ?? caption} onChange={e=>current?updateClip(current.id,{caption:e.target.value}):setCaption(e.target.value)}/>
+          <div className="text-presets"><button onClick={()=>current&&updateClip(current.id,{hook:"You won't believe what happens next..."})}>Curiosity hook</button><button onClick={()=>current&&updateClip(current.id,{hook:"The moment everything changed"})}>Story hook</button></div>
+        </div>}
+
+        {panel==="audio" && <div className="inspector-body">
+          <div className="inspector-title">Audio</div>
+          <label className="switch-row"><span>Mute export</span><input type="checkbox" checked={mute} onChange={e=>setMute(e.target.checked)}/></label>
+          <label className="range-control">Volume <b>{Math.round(volume*100)}%</b><input type="range" min="0" max="1" step=".05" value={volume} onChange={e=>setVolume(Number(e.target.value))}/></label>
+          <div className="field-label">PLAYBACK SPEED</div><div className="speed-grid">{[.75,1,1.25,1.5].map(v=><button className={speed===v?"active":""} key={v} onClick={()=>setSpeed(v)}>{v}×</button>)}</div>
+          <div className="audio-note">Exported clips keep the source audio track when supported by the browser.</div>
+        </div>}
+
+        {panel==="export" && <div className="inspector-body">
+          <div className="inspector-title">Export studio</div>
+          <div className="export-summary"><b>{clips.length}</b><span>clips ready</span><b>{format}</b><span>canvas</span></div>
+          <div className="field-label">QUALITY</div><div className="speed-grid">{["high","medium","low"].map(v=><button className={quality===v?"active":""} key={v} onClick={()=>setQuality(v)}>{v==="high"?"High":v==="medium"?"Medium":"Fast"}</button>)}</div>
+          <button className="export-big" disabled={busy||!clips.length} onClick={renderAll}>{busy?"Rendering...":"Render all clips"} <span>→</span></button>
+          {outputs.length>0 && <div className="export-list">{outputs.map((o,i)=><a key={o.id} href={o.url} download={o.name}>↓ {i+1}. {o.name}</a>)}</div>}
+          <div className="status-box">{status}</div>
+        </div>}
       </aside>
     </main>
-    <canvas ref={canvasRef} hidden/>
-  </div>;
+  </div>
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<React.StrictMode><App/></React.StrictMode>);
