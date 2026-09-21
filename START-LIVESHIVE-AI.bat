@@ -1,18 +1,29 @@
 @echo off
-title LiveShive AI Engine
+title LiveShive Clipper - Private AI
 cd /d "%~dp0"
 echo.
-echo ==========================================
-echo   LiveShive AI Engine - PRIVATE LOCAL MODE
-echo ==========================================
+echo ==============================================
+echo   LIVESHIVE CLIPPER - PRIVATE AI MODE
+echo ==============================================
 echo.
+echo Installing dependencies if needed...
 if not exist node_modules\openai (
-  echo Installing AI engine dependencies...
   call npm install
+  if errorlevel 1 (
+    echo.
+    echo Dependency installation failed.
+    pause
+    exit /b 1
+  )
 )
 echo.
-echo Starting LiveShive AI Engine on 127.0.0.1:8787
-echo Keep this window open while using LiveShive.
+echo Starting the private AI engine...
+start "LiveShive AI Engine" cmd /k "cd /d "%~dp0" && npm run ai:server"
+timeout /t 2 /nobreak >nul
+echo Opening LiveShive...
+start "" "https://abdoutadj707-ops.github.io/LiveShive-Clipper/"
 echo.
-call npm run ai:server
+echo Keep the AI Engine window open while using LiveShive.
+echo Your OpenAI key is stored locally by the engine, not in GitHub.
+echo.
 pause
