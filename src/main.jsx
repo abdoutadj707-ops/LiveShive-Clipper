@@ -33,46 +33,6 @@ function buildCaptions(transcript,start,end){
 }
 
 port React from "react";
-import ReactDOM from "react-dom/client";
-import "./index.css";
-
-const ENGINE_BASE="http://127.0.0.1:8787";
-const uid=()=>Math.random().toString(36).slice(2,10);
-const fmt=s=>{s=Number(s)||0;return String(Math.floor(s/60)).padStart(2,"0")+":"+String(Math.floor(s%60)).padStart(2,"0")};
-const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
-const styles={
-  viral:{label:"Viral / Curiosity",instruction:"strong curiosity without clickbait; concise, high-retention wording"},
-  cinematic:{label:"Cinematic",instruction:"dramatic, cinematic, emotional but faithful to the source"},
-  informative:{label:"Informative",instruction:"clear, useful, precise, educational wording"},
-  punchy:{label:"Fast & Punchy",instruction:"very short, energetic, direct wording"},
-  story:{label:"News / Story",instruction:"storytelling structure: setup, tension, payoff; factual and easy to follow"}
-};
-
-async function engineFetch(path,options={}){
-  let r;
-  try{r=await fetch(ENGINE_BASE+path,{...options,signal:AbortSignal.timeout(120000)})}
-  catch(e){throw new Error("LiveShive AI Engine is not running. Start the private LiveShive Engine on this PC, then reload the page.")}
-  if(!r.ok){let msg="LiveShive Engine request failed";try{const j=await r.json();msg=j.error||msg}catch{}throw new Error(msg+" ("+r.status+")")}
-  return r;
-}
-
-async function engineStatus(){
-  try{const r=await fetch(ENGINE_BASE+"/api/health",{signal:AbortSignal.timeout(2500)});return r.ok?await r.json():null}catch{return null}}
-
-function buildCaptions(transcript,start,end){
-  return (transcript.segments||[]).filter(s=>Number(s.end)>start&&Number(s.start)<end).map(s=>({
-    start:Math.max(0,Number(s.start)-start),end:Math.min(end-start,Number(s.end)-start),
-    text:String(s.text||"").trim()
-  })).filter(x=>x.text);
-}
-
-function buildCaptions(transcript,start,end){
-  return (transcript.segments||[]).filter(s=>Number(s.end)>start&&Number(s.start)<end).map(s=>({
-    start:Math.max(0,Number(s.start)-start),end:Math.min(end-start,Number(s.end)-start),
-    text:String(s.text||"").trim()
-  })).filter(x=>x.text);
-}
-
 function App(){
   const [file,setFile]=React.useState(null),[url,setUrl]=React.useState("");
   const [duration,setDuration]=React.useState(0),[clips,setClips]=React.useState([]);
