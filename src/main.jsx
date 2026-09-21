@@ -32,7 +32,7 @@ function buildCaptions(transcript,start,end){
   })).filter(x=>x.text);
 }
 
-port React from "react";
+
 function App(){
   const [file,setFile]=React.useState(null),[url,setUrl]=React.useState("");
   const [duration,setDuration]=React.useState(0),[clips,setClips]=React.useState([]);
