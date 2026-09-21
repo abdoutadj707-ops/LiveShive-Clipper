@@ -41,7 +41,7 @@ function App(){
   const [quality,setQuality]=React.useState("high"),[outputs,setOutputs]=React.useState([]);
   const [playing,setPlaying]=React.useState(false),[renderIndex,setRenderIndex]=React.useState(0);
   const [activeTab,setActiveTab]=React.useState("results");
-  const videoRef=React.useRef(null),canvasRef=React.useRef(null),inputRef=React.useRef(null);
+  const videoRef=React.useRef(null),canvasRef=React.useRef(null),inputRef=React.useRef(null),audioCtxRef=React.useRef(null),mediaSourceRef=React.useRef(null),audioDestRef=React.useRef(null);
 
   const current=clips.find(c=>c.id===selected);
 
@@ -113,7 +113,28 @@ function App(){
     const w=1080,h=format==="1:1"?1080:format==="16:9"?608:1920;canvas.width=w;canvas.height=h;
     const ctx=canvas.getContext("2d");v.pause();v.playbackRate=1;v.currentTime=c.start;
     await new Promise(r=>{const done=()=>{v.removeEventListener("seeked",done);r()};v.addEventListener("seeked",done,{once:true});setTimeout(r,700)});
-    const stream=canvas.captureStream(30);let mime="video/webm;codecs=vp9,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
+    const stream=canvas.captureStream(30);
+    try{
+      const AudioCtx=window.AudioContext||window.webkitAudioContext;
+      if(AudioCtx){
+        if(!audioCtxRef.current)audioCtxRef.current=new AudioCtx();
+        if(!mediaSourceRef.current){
+          mediaSourceRef.current=audioCtxRef.current.createMediaElementSource(v);
+          audioDestRef.current=audioCtxRef.current.createMediaStreamDestination();
+          mediaSourceRef.current.connect(audioDestRef.current);
+          mediaSourceRef.current.connect(audioCtxRef.current.destination);
+        }
+        await audioCtxRef.current.resume();
+        v.muted=false;
+        audioDestRef.current.stream.getAudioTracks().forEach(t=>stream.addTrack(t));
+      }else if(v.captureStream){
+        v.captureStream().getAudioTracks().forEach(t=>stream.addTrack(t));
+      }
+    }catch(e){
+      console.warn("Audio capture fallback:",e);
+      if(v.captureStream)v.captureStream().getAudioTracks().forEach(t=>stream.addTrack(t));
+    }
+    let mime="video/webm;codecs=vp9,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
     const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:quality==="high"?8000000:quality==="medium"?5000000:2500000,audioBitsPerSecond:128000});
     const chunks=[];rec.ondataavailable=e=>e.data?.size&&chunks.push(e.data);
     const done=new Promise(r=>rec.onstop=()=>r(new Blob(chunks,{type:mime})));rec.start(100);await v.play();
