@@ -29,24 +29,63 @@ function buildCaptions(transcript,start,end){
     text:String(s.text||"").trim()
   })).filter(x=>x.text);
 }
+// Pick the most "energetic" sub-moments inside a clip (proxy: characters spoken per second)
+// used both to build the fast-cut hook montage and to rank captions.
+function pickHookMoments(clip,maxCount=5){
+  const segs=clip.captions||[];
+  if(!segs.length)return[];
+  const scored=segs.map(s=>({...s,energy:s.text.length/Math.max(0.35,s.end-s.start)}));
+  return scored.sort((a,b)=>b.energy-a.energy).slice(0,maxCount).sort((a,b)=>a.start-b.start);
+}
+// Canvas text wrapping: splits text into lines that fit maxWidth, returns array of lines.
+function wrapLines(ctx,text,maxWidth,maxLines=3){
+  const words=String(text||"").split(/\s+/).filter(Boolean);
+  const lines=[];let line="";
+  for(const w of words){
+    const test=line?line+" "+w:w;
+    if(ctx.measureText(test).width>maxWidth&&line){lines.push(line);line=w;if(lines.length===maxLines-1){line=words.slice(words.indexOf(w)).join(" ");break}}
+    else line=test;
+  }
+  if(line)lines.push(line);
+  return lines.slice(0,maxLines);
+}
+function drawWrapped(ctx,text,cx,baseY,maxWidth,lineHeight,fill,stroke,lineW){
+  const lines=wrapLines(ctx,text,maxWidth);
+  const startY=baseY-(lines.length-1)*lineHeight;
+  lines.forEach((ln,i)=>{
+    const y=startY+i*lineHeight;
+    ctx.lineWidth=lineW;ctx.strokeStyle=stroke;ctx.strokeText(ln,cx,y,maxWidth);
+    ctx.fillStyle=fill;ctx.fillText(ln,cx,y,maxWidth);
+  });
+}
 
 function App(){
   const [file,setFile]=React.useState(null),[url,setUrl]=React.useState("");
   const [duration,setDuration]=React.useState(0),[clips,setClips]=React.useState([]);
   const [selected,setSelected]=React.useState(null),[style,setStyle]=React.useState("viral");
   const [clipCount,setClipCount]=React.useState(8),[minLen,setMinLen]=React.useState(12),[maxLen,setMaxLen]=React.useState(40);
+  const [minScore,setMinScore]=React.useState(0);
   const [apiKey,setApiKey]=React.useState(""),[showKey,setShowKey]=React.useState(false),[engine,setEngine]=React.useState(null),[busy,setBusy]=React.useState(false);
   const [stage,setStage]=React.useState("idle"),[progress,setProgress]=React.useState(0),[status,setStatus]=React.useState("Upload one video. LiveShive will do the rest.");
   const [format,setFormat]=React.useState("9:16"),[blur,setBlur]=React.useState(true),[ranking,setRanking]=React.useState(false);
   const [quality,setQuality]=React.useState("high"),[outputs,setOutputs]=React.useState([]);
   const [playing,setPlaying]=React.useState(false),[renderIndex,setRenderIndex]=React.useState(0);
   const [activeTab,setActiveTab]=React.useState("results");
+  const [hookMontage,setHookMontage]=React.useState(true),[hookCount,setHookCount]=React.useState(5),[hookSpeed,setHookSpeed]=React.useState(1.6);
+  const [previewTime,setPreviewTime]=React.useState(0);
   const videoRef=React.useRef(null),canvasRef=React.useRef(null),inputRef=React.useRef(null),audioCtxRef=React.useRef(null),mediaSourceRef=React.useRef(null),audioDestRef=React.useRef(null);
 
   const current=clips.find(c=>c.id===selected);
 
   React.useEffect(()=>{engineStatus().then(setEngine);const t=setInterval(()=>engineStatus().then(setEngine),5000);return()=>clearInterval(t)},[]);
   React.useEffect(()=>()=>{if(url)URL.revokeObjectURL(url);outputs.forEach(x=>URL.revokeObjectURL(x.url))},[]);
+  // Keep the live preview's subtitle/hook in sync as the video actually plays.
+  React.useEffect(()=>{
+    const v=videoRef.current;if(!v)return;
+    const onTime=()=>setPreviewTime(v.currentTime||0);
+    v.addEventListener("timeupdate",onTime);
+    return()=>v.removeEventListener("timeupdate",onTime);
+  },[url]);
   async function saveKey(v){
     setApiKey(v);
     try{const r=await engineFetch("/api/key",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:v})});setEngine(await r.json());setStatus("OpenAI key saved securely on this PC. LiveShive will use it automatically.")}
@@ -83,12 +122,14 @@ function App(){
       const plan=await r.json();setProgress(68);
       setStatus("3/4 Selecting the strongest moments and preparing captions, hooks and commentary...");
       const raw=(plan.clips||[]).filter(x=>Number.isFinite(Number(x.start))&&Number.isFinite(Number(x.end)));
-      const sorted=raw.map((x,i)=>{
+      let sorted=raw.map((x,i)=>{
         const start=clamp(Number(x.start)-Math.min(1.2,Number(x.start)),0,duration);
         const end=clamp(Number(x.end)+Math.min(1.0,Math.max(0,duration-Number(x.end))),start+.5,duration);
         return {id:uid(),start,end,title:x.title||`Clip ${String(i+1).padStart(2,"0")}`,score:Number(x.score)||0,hook:x.hook||"",overlay:x.overlay||"",postCaption:x.postCaption||"",reason:x.reason||"",captions:buildCaptions(plan.transcript||{segments:[]},start,end)};
-      }).sort((a,b)=>b.score-a.score).slice(0,clipCount);
-      if(!sorted.length)throw new Error("No strong standalone moments were found.");
+      }).sort((a,b)=>b.score-a.score);
+      if(minScore>0)sorted=sorted.filter(c=>c.score>=minScore);
+      sorted=sorted.slice(0,clipCount);
+      if(!sorted.length)throw new Error(minScore>0?`No clips reached the minimum score of ${minScore}. Lower the threshold and try again.`:"No strong standalone moments were found.");
       setClips(sorted);setSelected(sorted[0].id);setStage("ready");setProgress(82);
       setStatus(`3/4 ${sorted.length} clips selected. Captions, hooks and post captions are ready. Rendering comes next.`);
       setActiveTab("results");
@@ -104,12 +145,35 @@ function App(){
     let cw=sw,ch=sh;if(src>target)cw=sh*target;else ch=sw/target;
     const sx=(sw-cw)/2,sy=(sh-ch)/2;ctx.drawImage(v,sx,sy,cw,ch,0,0,w,h);
     const hook=c.hook;
-    if(hook){ctx.textAlign="center";ctx.font="900 58px Arial";ctx.lineWidth=12;ctx.strokeStyle="#000";ctx.strokeText(hook,w/2,145,w-90);ctx.fillStyle="#fff";ctx.fillText(hook,w/2,145,w-90)}
+    if(hook){ctx.textAlign="center";ctx.font="900 58px Arial";drawWrapped(ctx,hook,w/2,145,w-90,64,"#fff","#000",12)}
     const rel=(v.currentTime-c.start);
     const cap=(c.captions||[]).find(x=>rel>=x.start&&rel<=x.end)?.text;
-    if(cap){ctx.textAlign="center";ctx.font="700 40px Arial";ctx.lineWidth=9;ctx.strokeStyle="#000";ctx.strokeText(cap,w/2,h-120,w-100);ctx.fillStyle="#fff";ctx.fillText(cap,w/2,h-120,w-100)}
-    if(c.overlay){ctx.font="700 34px Arial";ctx.lineWidth=8;ctx.strokeStyle="#000";ctx.strokeText(c.overlay,w/2,h-220,w-120);ctx.fillStyle="#ffd95a";ctx.fillText(c.overlay,w/2,h-220,w-120)}
+    if(cap){ctx.textAlign="center";ctx.font="700 40px Arial";drawWrapped(ctx,cap,w/2,h-120,w-100,46,"#fff","#000",9)}
+    if(c.overlay){ctx.textAlign="center";ctx.font="700 34px Arial";drawWrapped(ctx,c.overlay,w/2,h-220,w-120,40,"#ffd95a","#000",8)}
     if(ranking){ctx.textAlign="left";ctx.font="900 84px Arial";ctx.lineWidth=12;ctx.strokeStyle="#000";ctx.strokeText(String(rank),55,120);ctx.fillStyle="#fff";ctx.fillText(String(rank),55,120)}
+  }
+  // Flash a burst of a clip's own most energetic sub-moments, sped up, as a fast-cut
+  // "hook" intro before the full clip plays — recorded into the SAME ongoing stream.
+  async function playHookMontage(ctx,v,w,h,c){
+    const moments=pickHookMoments(c,hookCount);
+    if(!moments.length)return;
+    for(const m of moments){
+      v.currentTime=c.start+m.start;
+      await new Promise(res=>{const done=()=>{v.removeEventListener("seeked",done);res()};v.addEventListener("seeked",done,{once:true});setTimeout(res,250)});
+      v.playbackRate=hookSpeed;
+      await v.play();
+      const flashMs=520;
+      await new Promise(resolve=>{
+        const t0=performance.now();
+        const loop=()=>{
+          drawFrame(ctx,v,w,h,c,0);
+          if(performance.now()-t0>flashMs||v.currentTime>=m.end){v.pause();resolve();return}
+          requestAnimationFrame(loop);
+        };
+        requestAnimationFrame(loop);
+      });
+    }
+    v.playbackRate=1;
   }
 
   async function renderOne(c,index,total){
@@ -141,7 +205,11 @@ function App(){
     let mime="video/webm;codecs=vp9,opus";if(!MediaRecorder.isTypeSupported(mime))mime="video/webm";
     const rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:quality==="high"?8000000:quality==="medium"?5000000:2500000,audioBitsPerSecond:128000});
     const chunks=[];rec.ondataavailable=e=>e.data?.size&&chunks.push(e.data);
-    const done=new Promise(r=>rec.onstop=()=>r(new Blob(chunks,{type:mime})));rec.start(100);await v.play();
+    const done=new Promise(r=>rec.onstop=()=>r(new Blob(chunks,{type:mime})));rec.start(100);
+    if(hookMontage)await playHookMontage(ctx,v,w,h,c);
+    v.currentTime=c.start;
+    await new Promise(r=>{const done2=()=>{v.removeEventListener("seeked",done2);r()};v.addEventListener("seeked",done2,{once:true});setTimeout(r,400)});
+    v.playbackRate=1;await v.play();
     await new Promise(resolve=>{let last=0;const loop=now=>{if(v.currentTime>=c.end-.03||v.ended){v.pause();rec.stop();resolve();return}if(now-last>20){drawFrame(ctx,v,w,h,c,ranking?total-index:index+1);last=now}requestAnimationFrame(loop)};requestAnimationFrame(loop)});
     return done;
   }
@@ -157,14 +225,19 @@ function App(){
     finally{setBusy(false);if(videoRef.current){videoRef.current.playbackRate=1;videoRef.current.muted=false}}
   }
 
+  const liveCaption=current?(current.captions||[]).find(x=>previewTime-current.start>=x.start&&previewTime-current.start<=x.end)?.text:"";
+
   return <div className="app">
-    <header className="topbar"><div className="brand"><div className="logo">LS</div><div><div className="kicker">AI AUTOPILOT VIDEO STUDIO</div><h1>LiveShive <b>Clipper</b></h1></div></div><div className="source-name">{file?.name||"No source video"}</div><button className="import" onClick={()=>inputRef.current?.click()}>＋ Import video</button><input ref={inputRef} hidden type="file" accept="video/*" onChange={loadFile}/></header>
+    <header className="topbar"><div className="brand"><div className="logo">CC</div><div><div className="kicker">AI AUTOPILOT VIDEO STUDIO</div><h1>Clip<b>Clap</b></h1></div></div><div className="source-name">{file?.name||"No source video"}</div><button className="import" onClick={()=>inputRef.current?.click()}>＋ Import video</button><input ref={inputRef} hidden type="file" accept="video/*" onChange={loadFile}/></header>
 
     <main className="layout">
       <aside className="left">
         <section className="card source-card"><div className="section-title">SOURCE</div><button className="drop" onClick={()=>inputRef.current?.click()}><span className="drop-icon">↑</span><b>{file?"Replace video":"Drop video here"}</b><small>MP4 / MOV / WebM</small></button>{file&&<div className="source-meta"><b>{file.name}</b><span>{fmt(duration)} • local source</span></div>}</section>
         <section className="card"><div className="section-title">WRITING STYLE <span>only creative choice</span></div><div className="style-grid">{Object.entries(styles).map(([k,v])=><button key={k} className={style===k?"active":""} onClick={()=>setStyle(k)}><b>{v.label}</b><small>{k==="viral"?"Curiosity":k==="cinematic"?"Emotion":k==="informative"?"Clarity":k==="punchy"?"Energy":"Story"}</small></button>)}</div></section>
-        <section className="card"><div className="section-title">AI OUTPUT</div><div className="row"><span>Clips</span><div className="mini-buttons">{[1,2,5,8,10,12].map(n=><button className={clipCount===n?"active":""} key={n} onClick={()=>setClipCount(n)}>{n}</button>)}</div></div><div className="row"><span>Length</span><select value={minLen} onChange={e=>setMinLen(+e.target.value)}><option value="10">10s min</option><option value="12">12s min</option><option value="15">15s min</option></select><select value={maxLen} onChange={e=>setMaxLen(+e.target.value)}><option value="30">30s max</option><option value="40">40s max</option><option value="60">60s max</option></select></div></section>
+        <section className="card"><div className="section-title">AI OUTPUT</div><div className="row"><span>Clips</span><div className="mini-buttons">{[1,2,5,8,10,12].map(n=><button className={clipCount===n?"active":""} key={n} onClick={()=>setClipCount(n)}>{n}</button>)}</div></div><div className="row"><span>Length</span><select value={minLen} onChange={e=>setMinLen(+e.target.value)}><option value="10">10s min</option><option value="12">12s min</option><option value="15">15s min</option></select><select value={maxLen} onChange={e=>setMaxLen(+e.target.value)}><option value="30">30s max</option><option value="40">40s max</option><option value="60">60s max</option></select></div>
+          <div className="row"><span>Min score</span><input type="range" min="0" max="95" step="5" value={minScore} onChange={e=>setMinScore(+e.target.value)}/><b>{minScore||"Any"}</b></div>
+        </section>
+        <section className="card"><div className="section-title">FAST-CUT HOOK INTRO</div><label className="row"><span>Add flash-cut intro</span><input type="checkbox" checked={hookMontage} onChange={e=>setHookMontage(e.target.checked)}/></label>{hookMontage&&<><div className="row"><span>Moments</span><div className="mini-buttons">{[3,4,5,6].map(n=><button className={hookCount===n?"active":""} key={n} onClick={()=>setHookCount(n)}>{n}</button>)}</div></div><div className="row"><span>Speed</span><div className="mini-buttons">{[1.5,1.6,1.7].map(n=><button className={hookSpeed===n?"active":""} key={n} onClick={()=>setHookSpeed(n)}>{n}x</button>)}</div></div></>}</section>
         <section className="card ai-key"><div className="section-title">PRIVATE AI ENGINE</div><label>OpenAI API key — stored only on this PC</label><div className="keybox"><input type={showKey?"text":"password"} value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="sk-..."/><button onClick={()=>saveKey(apiKey)} disabled={!apiKey.trim()}>Save</button><button onClick={()=>setShowKey(!showKey)}>{showKey?"Hide":"Show"}</button></div><small className="privacy">The key goes only to 127.0.0.1 and is never committed to GitHub or exposed to visitors.</small><div className={"engine-state "+(engine?.configured?"ok":"off")}>{engine?.configured?"● Private AI Engine connected":"● AI Engine not connected — click Analyze to see setup"}</div><button className="engine-help" onClick={()=>setActiveTab("settings")}>How to activate LiveShive AI →</button></section>
       </aside>
 
@@ -172,7 +245,7 @@ function App(){
         <div className="hero"><div><div className="kicker">ONE VIDEO → READY-TO-POST CLIPS</div><h2>Give LiveShive the video.<br/><span>You choose the writing style.</span></h2><p>Transcript → moment analysis → clip selection → hooks → accurate captions → on-video commentary → post captions → render.</p></div><button className="autopilot" disabled={!file||busy} onClick={autopilot}>{busy?"Working...":"Analyze & Auto-Edit"} <span>✦</span></button></div>
         <div className="progress"><div className="progress-line"><i style={{width:progress+"%"}}/></div><div className="progress-labels"><span className={stage==="transcribing"?"on":""}>TRANSCRIBE</span><span className={stage==="transcribing"?"on":""}>UNDERSTAND</span><span className={stage==="ready"||stage==="rendering"||stage==="done"?"on":""}>EDIT</span><span className={stage==="rendering"||stage==="done"?"on":""}>RENDER</span></div></div>
         <div className="preview card"><div className="preview-head"><div><b>{current?.title||"AI result preview"}</b><span>{current?Math.round(current.score)+"/100 short-form score":"Waiting for analysis"}</span></div><div className="tabs">{["results","transcript","settings"].map(t=><button className={activeTab===t?"active":""} key={t} onClick={()=>setActiveTab(t)}>{t}</button>)}</div></div>
-          <div className="stage"><div className="phone">{url?<><video ref={videoRef} src={url} playsInline onError={()=>setStatus("Video failed to load. Try MP4 (H.264/AAC) or WebM, then re-import it.")} onLoadedMetadata={onMeta} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onClick={togglePlay}/>{current?.hook&&<div className="hook">{current.hook}</div>}{current?.overlay&&<div className="overlay">{current.overlay}</div>}{current&&<div className="sub">{(current.captions||[]).find(x=>(videoRef.current?.currentTime||current.start)-current.start>=x.start&&(videoRef.current?.currentTime||current.start)-current.start<=x.end)?.text||""}</div>} {!playing&&<button className="bigplay" onClick={togglePlay}>▶</button>}</>:<div className="empty">Import a video<br/><small>then press Analyze & Auto-Edit</small></div>}</div></div>
+          <div className="stage"><div className="phone">{url?<><video ref={videoRef} src={url} playsInline onError={()=>setStatus("Video failed to load. Try MP4 (H.264/AAC) or WebM, then re-import it.")} onLoadedMetadata={onMeta} onPlay={()=>setPlaying(true)} onPause={()=>setPlaying(false)} onClick={togglePlay}/>{current?.hook&&<div className="hook">{current.hook}</div>}{current?.overlay&&<div className="overlay">{current.overlay}</div>}{current&&<div className="sub">{liveCaption}</div>} {!playing&&<button className="bigplay" onClick={togglePlay}>▶</button>}</>:<div className="empty">Import a video<br/><small>then press Analyze & Auto-Edit</small></div>}</div></div>
           {activeTab==="results"&&<div className="result-list">{clips.map((c,i)=><button key={c.id} className={"result "+(selected===c.id?"selected":"")} onClick={()=>{setSelected(c.id);seek(c.start)}}><span className="rank">#{i+1}</span><span className="rtext"><b>{c.title}</b><small>{fmt(c.end-c.start)} • {Math.round(c.score)}/100</small></span><span className="arrow">›</span></button>)}</div>}
           {activeTab==="transcript"&&<div className="transcript"><p>Captions are generated from timestamped speech and mapped back to each selected clip.</p>{current?.captions?.map((x,i)=><div key={i}><time>{fmt(x.start)}</time><span>{x.text}</span></div>)}</div>}
           {activeTab==="settings"&&<div className="settings"><label>Format <select value={format} onChange={e=>setFormat(e.target.value)}><option>9:16</option><option>1:1</option><option>16:9</option></select></label><label>Blurred background <input type="checkbox" checked={blur} onChange={e=>setBlur(e.target.checked)}/></label><label>Ranking 5 → 1 <input type="checkbox" checked={ranking} onChange={e=>setRanking(e.target.checked)}/></label><label>Render quality <select value={quality} onChange={e=>setQuality(e.target.value)}><option value="high">High</option><option value="medium">Medium</option><option value="fast">Fast</option></select></label></div>}
